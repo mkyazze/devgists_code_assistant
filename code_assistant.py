@@ -6,6 +6,7 @@ import uvicorn
 from pydantic import BaseModel
 from llama_cpp import Llama
 import logging
+import multiprocessing
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +30,8 @@ class CodeAssistant:
             self.llm = Llama(
                 model_path=model_path,
                 n_ctx=4096,  # Context window
-                n_threads=4    # Adjust based on your CPU
+                n_threads=max(4, multiprocessing.cpu_count() - 2),
+                temperature=0.2  # Lower for faster, more focused responses
             )
             logger.info("Llama model loaded successfully")
         except Exception as e:
@@ -95,7 +97,7 @@ class CodeAssistant:
     
     def get_llm_response(self, prompt: str, max_tokens: int = 500) -> str:
         """
-        Get a response from the Llama model.
+        Get a response from the Llama model with system message.
         
         Args:
             prompt: Input prompt for the model
@@ -105,15 +107,23 @@ class CodeAssistant:
             Model's response as a string
         """
         try:
+            # Create a system message that instructs the model
+            system_message = "You are a helpful coding assistant. Always provide direct answers without including the original prompt instructions in your response."
+            
+            # Combine system message with user prompt
+            full_prompt = f"<system>{system_message}</system>\n\n<user>{prompt}</user>\n\n<assistant>"
+            
             response = self.llm(
-                prompt,
+                full_prompt,
                 max_tokens=max_tokens,
-                temperature=0.7
+                temperature=0.7,
+                stop=["</assistant>"]  # Stop generating at the end of the assistant's response
             )
             return response['choices'][0]['text'].strip()
         except Exception as e:
             logger.error(f"Error getting LLM response: {str(e)}")
             raise
+    
 
     def analyze_code(self, prompt: str) -> str:
         """
@@ -126,6 +136,7 @@ class CodeAssistant:
             LLM's analysis
         """
         return self.get_llm_response(prompt, max_tokens=1000)
+    
 
     def suggest_improvements(self, code: str) -> str:
         """
@@ -135,21 +146,22 @@ class CodeAssistant:
             code: Code to improve
             
         Returns:
-            Suggested improvements
+            Structured improvement suggestions
         """
-        prompt = f"""Review this code and suggest improvements:
-
+        prompt = f"""Code to review:
         ```
         {code}
         ```
-
-        Provide specific, actionable improvements including:
-        1. Code quality improvements
-        2. Performance optimizations
-        3. Security considerations
-        4. Best practices
+        
+        Please analyze this code and provide specific, actionable improvements for:
+        - Code quality and readability
+        - Performance optimizations
+        - Security considerations
+        - Error handling
+        - Testing suggestions
         """
-        return self.get_llm_response(prompt, max_tokens=1000)
+        
+        return self.get_llm_response(prompt, max_tokens=1500)
 
 # FastAPI server setup
 app = FastAPI()
@@ -168,9 +180,8 @@ class CodeSearchRequest(BaseModel):
 
 # Initialize CodeAssistant
 assistant = CodeAssistant(
-    root_dir="/Users/drkyazze/Documents/CODE_TO_WORK_WITH_XYZ", # Change / replace with root directory
-    model_path="/Users/drkyazze/.cache/lm-studio/models/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/qwen2.5-coder-14b-instruct-q4_0.gguf" # Change model path before use
-)
+    root_dir="/Users/drkyazze/Documents/CODE_TO_WORK_WITH_XYZ", # Change / replace with root directory of the code you want to analyze
+    model_path="/Users/drkyazze/.cache/lm-studio/models/TheBloke/CodeLlama-7B-Instruct-GGUF/codellama-7b-instruct.Q4_0.gguf")
 
 @app.on_event("startup")
 async def startup_event():
@@ -185,31 +196,17 @@ async def analyze_code(request: CodeAnalysisRequest):
             logger.error(f"File not found in cache: {request.file_path}")
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Get code from cache
         code = assistant.file_cache[request.file_path]
         logger.info(f"Analyzing file: {request.file_path}")
-        logger.info(f"Code preview: {code[:100]}...")  # Log preview for debugging
+        logger.info(f"Code preview: {code[:100]}...")
         
-        # Create a more structured prompt
-        prompt = f"""You are analyzing source code. For every response:
-                1. First show the relevant code snippet using markdown code blocks
-                2. Then provide your analysis
-                3. Finally answer the specific question
+        prompt = f"""Code to analyze:
+        ```
+        {code}
+        ```
+        
+        Question: {request.question}"""
 
-                Code to analyze:
-                ```
-                {code}
-                ```
-
-                Question: {request.question}
-
-                Your response should:
-                - Always include relevant code snippets in markdown code blocks
-                - Explain what the code does
-                - Specifically answer the question asked
-                """
-
-        # Analyze the code with structured prompt
         analysis = assistant.analyze_code(prompt)
         return {"analysis": analysis}
     except Exception as e:
@@ -228,7 +225,7 @@ async def improve_code(request: CodeAnalysisRequest):
         return {"improvements": improvements}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.post("/search")
 async def search_code(request: CodeSearchRequest):
     """Endpoint to search codebase"""
