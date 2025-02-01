@@ -2,6 +2,9 @@
 
 A local FastAPI server that connects VS Code to local LLM models for code analysis and intelligent responses.
 
+Read Tutorial at: https://substack.com/home/post/p-153166269
+VS Code Extension: https://marketplace.visualstudio.com/items?itemName=DrMichaelKyazze.devgists-code-assistant
+
 #### Requirements
 ```python
 pip install llama-cpp-python fastapi "uvicorn[standard]"
